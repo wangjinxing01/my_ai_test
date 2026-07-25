@@ -8,11 +8,22 @@ providers:
     label: Dify Workflow
     config:
       # Dify 工作流 API
-      # baseUrl / apiKey / user 通过环境变量注入，避免密钥进 Git 仓库
+      # baseUrl / apiKey / user 通过环境变量注入,避免密钥进 Git 仓库
       # provider 脚本内会读取 process.env.DIFY_BASE_URL / DIFY_API_KEY / DIFY_USER
-      inputVarName: input_picture
-      # 图片目录默认为 ../inputs（相对本 provider 脚本所在 providers/ 目录）
-      # 如需指定，可设绝对路径或相对脚本目录的路径
+      #
+      # 输入配置:描述工作流的每个输入项
+      #   - varName:  Dify 工作流里的变量名
+      #   - type:     file_array(文件数组) | file(单文件) | text(纯文本)
+      #   - source:   从 tests.json 的 vars 的哪个字段取值
+      #   - mimeType: 文件 MIME 类型(file/file_array 用),决定 Dify 里 type=image/document
+      inputs:
+        - varName: input_picture
+          type: file_array
+          source: filename
+          mimeType: image/jpeg
+      # 输出路径:从 Dify 响应取哪个字段作为 promptfoo 的 output
+      # 支持点分路径,如 data.outputs.output
+      outputPath: data.outputs.output
 
 tests: file://tests.json
 

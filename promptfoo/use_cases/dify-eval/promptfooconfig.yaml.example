@@ -1,0 +1,153 @@
+# ============================================================
+# promptfooconfig.yaml.example
+# ============================================================
+# Dify 工作流 promptfoo 评测配置示例 - 覆盖 5 种常见输入场景
+#
+# 本文件不是可运行配置(没有真实 API key),仅作模板参考。
+# 复制为本项目的 promptfooconfig.yaml 后,按实际工作流改写。
+#
+# 密钥三件套通过环境变量注入(provider 会自动读取):
+#   DIFY_BASE_URL  Dify API 地址,如 http://dify.mycompany.com:5001/v1
+#   DIFY_API_KEY   Dify 应用 API Key,以 app- 开头
+#   DIFY_USER      Dify 用户标识(任意字符串,如 abc-123)
+# 详见 .env.example
+# ============================================================
+
+# ===== 通用部分(所有场景共用) =====
+description: Dify 工作流 promptfoo 评测(按需修改描述)
+
+prompts:
+  - file://prompt.txt
+
+tests: file://tests.json
+
+# 评测用的断言模型(promptfoo 默认从 OPENAI_API_KEY 读 key)
+defaultTest:
+  options:
+    provider:
+      id: openai:chat:glm-5.2
+      config:
+        apiBaseUrl: 'https://open.bigmodel.cn/api/paas/v4'
+        max_tokens: 4096
+  # 断言按实际业务写,这里只占位
+  assert:
+    - type: javascript
+      value: file://assertions.js:assertFormat
+
+
+# ============================================================
+# 选一个 providers 配置块用(下面 5 种场景,按实际工作流选其一)
+# ============================================================
+
+providers:
+
+  # ----------------------------------------------------------
+  # 场景 1:单图片输入(动物识别、OCR、缺陷检测等)
+  # ----------------------------------------------------------
+  # Dify 工作流输入:input_picture(Array[File] 类型,但只传 1 张)
+  # 工作流输出:文本(放在 data.outputs.output)
+  - id: file://providers/dify_workflow.js
+    label: 单图片识别
+    config:
+      inputs:
+        - varName: input_picture      # Dify 工作流里的变量名
+          type: file_array            # Dify 类型 Array[File]
+          source: filename            # 从 tests.json 的 vars.filename 取文件名
+          mimeType: image/jpeg        # 图片类型,Dify 里 type=image
+      outputPath: data.outputs.output
+
+
+  # ----------------------------------------------------------
+  # 场景 2:图片数组输入(多图比对、相册分类等)
+  # ----------------------------------------------------------
+  # Dify 工作流输入:pictures(Array[File],传多张)
+  # tests.json 的 vars.pictures 是数组:["a.jpg", "b.jpg", "c.jpg"]
+  - id: file://providers/dify_workflow.js
+    label: 多图片输入
+    config:
+      inputs:
+        - varName: pictures
+          type: file_array
+          source: pictures           # vars.pictures 是文件名数组
+          mimeType: image/jpeg
+      outputPath: data.outputs.output
+
+
+  # ----------------------------------------------------------
+  # 场景 3:单文件输入(文档问答、PDF 解析等)
+  # ----------------------------------------------------------
+  # Dify 工作流输入:document(File 类型,单个)
+  # 注意 type=file(不是 file_array),provider 会传单值而非数组
+  - id: file://providers/dify_workflow.js
+    label: 单文档输入
+    config:
+      inputs:
+        - varName: document
+          type: file                 # 单文件
+          source: doc_filename
+          mimeType: application/pdf  # PDF;Word 用 application/vnd.openxmlformats...
+      outputPath: data.outputs.output
+
+
+  # ----------------------------------------------------------
+  # 场景 4:纯文本输入(翻译、摘要、分类等,无文件)
+  # ----------------------------------------------------------
+  # Dify 工作流输入:text(String 类型)
+  # 注意 type=text,provider 不上传文件,直接塞字符串
+  - id: file://providers/dify_workflow.js
+    label: 纯文本输入
+    config:
+      inputs:
+        - varName: text
+          type: text                 # 纯文本,无需上传
+          source: input_text         # 从 vars.input_text 取字符串
+      outputPath: data.outputs.output
+
+
+  # ----------------------------------------------------------
+  # 场景 5:文本 + 文件混合输入(RAG 问答典型场景)
+  # ----------------------------------------------------------
+  # Dify 工作流输入:question(String) + document(File)
+  # 演示多个输入项如何组合
+  - id: file://providers/dify_workflow.js
+    label: 文本+文件混合
+    config:
+      inputs:
+        - varName: question
+          type: text
+          source: user_question      # 文本问题
+        - varName: document
+          type: file
+          source: doc_filename       # 配套文档
+          mimeType: application/pdf
+      outputPath: data.outputs.output
+
+
+# ============================================================
+# 输入类型 type 字段说明
+# ============================================================
+# type 取值       Dify 类型         provider 行为
+# -----------    ----------------   --------------------------------
+# file_array     Array[File]        上传多个文件,传 [{...}, {...}] 数组
+# file           File               上传单个文件,传 {...} 单值
+# text           String/Number 等   不上传,直接塞字符串
+#
+# mimeType 字段(仅 file/file_array 用):
+#   image/jpeg, image/png  -> Dify type=image
+#   application/pdf        -> Dify type=document
+#   其他                   -> Dify type=document
+#
+# source 字段:
+#   指向 tests.json 里 vars 的某个 key
+#   file/file_array 类型:source 的值是文件名(或文件名数组),provider 会去 filesDir 找
+#   text 类型:source 的值就是要传给工作流的字符串
+#
+# filesDir(可选):
+#   默认是 providers/ 脚本所在目录的 ../inputs
+#   如需指定:config.filesDir: D:/my_files 或 ../data
+#
+# outputPath 字段:
+#   从 Dify 响应取哪个字段作为 promptfoo 的 output
+#   支持点分路径,如 data.outputs.output / data.outputs.result.text
+#   不配或路径不存在:返回完整 Dify 响应 JSON 字符串
+# ============================================================

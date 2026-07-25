@@ -10,27 +10,21 @@
  */
 
 /**
- * 从 promptfoo 的 output 中提取 Dify 工作流的实际输出对象。
+ * 从 promptfoo 的 output 中提取工作流的实际输出对象。
  *
- * Dify 返回结构：data.outputs.output（字符串化的 JSON，可能被 ```json ``` 包裹）
- * promptfoo 的 output 可能是字符串或已解析对象，这里统一处理。
+ * 改造后的 provider 按 outputPath(默认 data.outputs.output)提取字段,
+ * 所以 promptfoo 传入的 output 已经是 LLM 输出的字符串(可能是 ```json 包裹的 JSON)。
+ * 不再需要从完整 Dify 响应里解析。
  *
  * @param {string|object} output - promptfoo 传入的输出
- * @returns {object} 解析后的 {name, number, description} 对象
- * @throws {Error} 解析失败时抛出，由调用方捕获
+ * @returns {object} 解析后的对象(如 {name, number, description})
+ * @throws {Error} 解析失败时抛出,由调用方捕获
  */
 function parseOutput(output) {
-  const raw = typeof output === 'string' ? JSON.parse(output) : output;
-
-  // Dify 错误响应没有 data 字段（如 Invalid upload file）
-  if (!raw || !raw.data || !raw.data.outputs) {
-    throw new Error('Dify 未返回有效输出，原始响应: ' + JSON.stringify(raw).slice(0, 300));
-  }
-
-  // output 字段是字符串化的 JSON，可能被 ```json ... ``` 包裹，去壳后解析
-  let s = raw.data.outputs.output || '';
-  s = s.replace(/```json/g, '').replace(/```/g, '').trim();
-
+  const s = (typeof output === 'string' ? output : JSON.stringify(output))
+    .replace(/```json/g, '')
+    .replace(/```/g, '')
+    .trim();
   return JSON.parse(s);
 }
 
