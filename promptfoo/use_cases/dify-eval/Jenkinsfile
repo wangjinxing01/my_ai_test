@@ -1,0 +1,93 @@
+// ============================================================
+// Dify 动物图片识别工作流 - promptfoo 测试流水线
+// ============================================================
+// 触发方式：手动 / 定时(每晚23:00) / Git提交
+// 前置依赖：Jenkins Agent 上需安装 Node.js 和 promptfoo(全局)
+// ============================================================
+
+pipeline {
+    agent any
+
+    triggers {
+        // 每晚 23:00 定时跑
+        cron('H 23 * * *')
+    }
+
+    environment {
+        // promptfoo 评测使用的断言模型 API Key（避免硬编码在仓库里）
+        OPENAI_API_KEY = credentials('promptfoo-glm-apikey')
+    }
+
+    options {
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+
+    stages {
+        stage('环境检查') {
+            steps {
+                echo '== 检查 Node.js 和 promptfoo =='
+                sh '''
+                    node --version || { echo "Node.js 未安装"; exit 1; }
+                    if ! command -v promptfoo &> /dev/null; then
+                        echo "promptfoo 未安装，正在安装..."
+                        npm install -g promptfoo
+                    else
+                        echo "promptfoo 已安装: $(promptfoo --version)"
+                    fi
+                '''
+            }
+        }
+
+        stage('运行 promptfoo 评测') {
+            steps {
+                echo '== 执行 promptfoo eval =='
+                // -j 1 串行执行，避免 Dify 模型供应商限流(429)
+                sh '''
+                    promptfoo eval -j 1 \
+                        --output promptfoo_results.json \
+                        --no-cache 2>&1 | tee promptfoo_run.log
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            echo '== 归档产物 =='
+            // 归档日志和结果，便于回溯
+            archiveArtifacts artifacts: 'promptfoo_run.log, promptfoo_results.json', allowEmptyArchive: true
+
+            // 发布 HTML 报告到 Jenkins 任务详情页
+            // 前置：Jenkins 安装 HTML Publisher 插件
+            publishHTML(target: [
+                reportDir: '.',
+                reportFiles: 'promptfoo_results.html',
+                reportName: 'Promptfoo 评测报告',
+                keepAll: true,
+                alwaysLinkToLastBuild: true,
+                allowMissing: true
+            ])
+
+            // 评测若有失败用例，则标记构建为不稳定(黄色)，便于流水线门禁
+            script {
+                if (fileExists('promptfoo_results.json')) {
+                    def results = readJSON file: 'promptfoo_results.json'
+                    def fails = 0
+                    if (results.results) {
+                        for (r in results.results) {
+                            if (r.success == false) {
+                                fails++
+                            }
+                        }
+                    }
+                    echo "评测完成，失败用例数: ${fails}"
+                    if (fails > 0) {
+                        currentBuild.result = 'UNSTABLE'
+                    }
+                }
+            }
+        }
+    }
+}

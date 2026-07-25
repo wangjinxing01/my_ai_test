@@ -1,0 +1,52 @@
+description: Dify 动物图片识别工作流 - 基本信息提取评测
+
+prompts:
+  - file://prompt.txt
+
+providers:
+  - id: file://providers/dify_workflow.js
+    label: Dify Workflow
+    config:
+      # Dify 工作流 API
+      # baseUrl / apiKey / user 通过环境变量注入，避免密钥进 Git 仓库
+      # provider 脚本内会读取 process.env.DIFY_BASE_URL / DIFY_API_KEY / DIFY_USER
+      inputVarName: input_picture
+      # 图片目录默认为 ../inputs（相对本 provider 脚本所在 providers/ 目录）
+      # 如需指定，可设绝对路径或相对脚本目录的路径
+
+tests: file://tests.json
+
+defaultTest:
+  options:
+    provider:
+      # 断言模型：智谱 GLM-5.2
+      # apiKey 通过环境变量 OPENAI_API_KEY 注入（promptfoo 默认读该变量）
+      id: openai:chat:glm-5.2
+      config:
+        apiBaseUrl: 'https://open.bigmodel.cn/api/paas/v4'
+        # 推理模型 glm-5.2 的 reasoning 会占用 token，默认 1024 会被思考占满导致无输出。
+        # 调大到 4096，留足空间让思考结束后还能输出判定 JSON。
+        max_tokens: 4096
+  assert:
+    # 断言1：格式校验 - JSON 含 name(string)/number(number)/description(string)
+    # 严格按 JSON 规范：数字不加引号，字符串加引号
+    - type: javascript
+      value: file://assertions.js:assertFormat
+
+    # 断言2：number 精确匹配
+    - type: javascript
+      value: file://assertions.js:assertNumber
+
+    # 断言3：description 字数 80~120
+    - type: javascript
+      value: file://assertions.js:assertDescriptionLength
+
+    # 断言4：name 语义判断（同一动物，允许别名/俗称/学名不同）
+    - type: llm-rubric
+      value: '输出应与"{{expected_name}}"指代同一种动物（允许别名、俗称、学名不同，但必须是同一种动物，不能是近缘物种）'
+      transform: file://assertions.js:transformName
+
+    # 断言5：description 语义近似（核心事实一致，不必逐字相同）
+    - type: llm-rubric
+      value: '输出应包含主要活动地区、外形、擅长内容，这三项内容与以下标准答案一致即可认为符合（不必逐字相同，但核心事实应一致）：{{expected_description}}'
+      transform: file://assertions.js:transformDescription
