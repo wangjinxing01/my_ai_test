@@ -2,7 +2,9 @@
 // Dify 动物图片识别工作流 - promptfoo 测试流水线
 // ============================================================
 // 触发方式：手动 / 定时(每晚23:00) / Git提交
-// 前置依赖：Jenkins Agent 上需安装 Node.js 和 promptfoo(全局)
+// 运行环境：Windows + Jenkins (LocalSystem 账号)
+// 前置依赖：Node.js（系统级 PATH 可用）
+//          promptfoo（自动定位或安装）
 // ============================================================
 
 pipeline {
@@ -14,8 +16,14 @@ pipeline {
     }
 
     environment {
-        // promptfoo 评测使用的断言模型 API Key（避免硬编码在仓库里）
+        // promptfoo 评测使用的断言模型 API Key（存为 Jenkins Secret Text 凭证）
         OPENAI_API_KEY = credentials('promptfoo-glm-apikey')
+        // Dify 工作流 API Key（存为 Jenkins Secret Text 凭证）
+        DIFY_API_KEY   = credentials('dify-apikey')
+        DIFY_BASE_URL  = 'http://dify.mycompany.com:5001/v1'
+        DIFY_USER      = 'abc-123'
+        // promptfoo 入口（优先用 npm 全局安装的，否则用 npx）
+        PROMPTFOO_ENTRY = 'dist/src/entrypoint.js'
     }
 
     options {
@@ -25,17 +33,26 @@ pipeline {
     }
 
     stages {
-        stage('环境检查') {
+        stage('环境准备') {
             steps {
-                echo '== 检查 Node.js 和 promptfoo =='
-                sh '''
-                    node --version || { echo "Node.js 未安装"; exit 1; }
-                    if ! command -v promptfoo &> /dev/null; then
-                        echo "promptfoo 未安装，正在安装..."
-                        npm install -g promptfoo
-                    else
-                        echo "promptfoo 已安装: $(promptfoo --version)"
-                    fi
+                echo '== 检查 Node.js =='
+                bat 'node --version'
+
+                echo '== 定位/安装 promptfoo =='
+                // Windows 用 bat；优先用全局 promptfoo，找不到则用 node 直调入口 JS
+                bat '''
+                    where promptfoo >nul 2>&1 && (
+                        echo promptfoo 已安装:
+                        promptfoo --version
+                    ) || (
+                        echo promptfoo 未在 PATH，尝试用 node 直调全局安装的入口...
+                        if exist "%APPDATA%\\npm\\node_modules\\promptfoo\\dist\\src\\entrypoint.js" (
+                            echo 使用已安装的全局 promptfoo
+                        ) else (
+                            echo 全局也未找到，使用 npx 临时拉取
+                        )
+                    )
+                    node --version
                 '''
             }
         }
@@ -43,11 +60,25 @@ pipeline {
         stage('运行 promptfoo 评测') {
             steps {
                 echo '== 执行 promptfoo eval =='
+                // 生成 .env 文件供 promptfoo --env-file 读取
+                // .env 不进 Git（已在 .gitignore），运行时由 Jenkins 凭证动态生成
+                writeFile file: '.env', text: """
+                    DIFY_BASE_URL=${DIFY_BASE_URL}
+                    DIFY_API_KEY=${DIFY_API_KEY}
+                    DIFY_USER=${DIFY_USER}
+                    OPENAI_API_KEY=${OPENAI_API_KEY}
+                """.trim()
+
                 // -j 1 串行执行，避免 Dify 模型供应商限流(429)
-                sh '''
-                    promptfoo eval -j 1 \
-                        --output promptfoo_results.json \
-                        --no-cache 2>&1 | tee promptfoo_run.log
+                // 同时输出 JSON(用于门禁判断) 和 HTML(用于页面展示)
+                // Windows 下用 bat，优先用 promptfoo 命令，回退到 node 调入口
+                bat '''
+                    set PROMPTFOO_CMD=
+                    where promptfoo >nul 2>&1 && set PROMPTFOO_CMD=promptfoo
+                    if "%PROMPTFOO_CMD%"=="" set PROMPTFOO_CMD=node "%APPDATA%\\npm\\node_modules\\promptfoo\\dist\\src\\entrypoint.js"
+
+                    %PROMPTFOO_CMD% eval -j 1 --env-file .env -o promptfoo_results.json -o promptfoo_results.html --no-cache 2>&1 | tee promptfoo_run.log
+                    exit /b 0
                 '''
             }
         }
@@ -55,8 +86,10 @@ pipeline {
 
     post {
         always {
+            echo '== 清理临时 .env（含密钥，勿归档） =='
+            bat 'if exist .env del .env'
+
             echo '== 归档产物 =='
-            // 归档日志和结果，便于回溯
             archiveArtifacts artifacts: 'promptfoo_run.log, promptfoo_results.json', allowEmptyArchive: true
 
             // 发布 HTML 报告到 Jenkins 任务详情页
