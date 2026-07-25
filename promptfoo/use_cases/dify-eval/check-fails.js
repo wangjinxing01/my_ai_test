@@ -11,10 +11,23 @@ let fails = 0;
 try {
   const raw = fs.readFileSync('promptfoo_results.json', 'utf8');
   const data = JSON.parse(raw);
-  // promptfoo 结果格式: { results: [ { success: true/false, ... }, ... ] }
-  const results = data.results || data;
-  if (Array.isArray(results)) {
+
+  // promptfoo eval 输出格式: { results: [ { success, ... }, ... ] }
+  // 兼容多种可能的结构
+  let results = null;
+  if (Array.isArray(data)) {
+    results = data;
+  } else if (data.results && Array.isArray(data.results)) {
+    results = data.results;
+  } else if (data.tests && Array.isArray(data.tests)) {
+    results = data.tests;
+  }
+
+  if (results) {
     fails = results.filter((x) => x.success === false).length;
+  } else {
+    // 未知结构,打印顶层 keys 帮助调试
+    console.error('check-fails: 未知 JSON 结构,顶层 keys: ' + Object.keys(data).join(','));
   }
 } catch (e) {
   console.error('check-fails: 无法解析 promptfoo_results.json: ' + e.message);

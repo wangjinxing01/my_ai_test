@@ -72,10 +72,13 @@ pipeline {
                         '''
 
                         // 串行执行(-j 1)避免 Dify 模型限流(429)
+                        // 注意:promptfoo 在有失败用例时会以 exit 100 退出,
+                        // 这是 promptfoo 的正常行为,不应判为 stage 失败。
+                        // 用 "|| ver" 吞掉退出码,让流程走到 post 阶段统一处理。
                         bat '''
                             @echo OFF
                             set PROMPTFOO_JS=%APPDATA%\\npm\\node_modules\\promptfoo\\dist\\src\\entrypoint.js
-                            node "%PROMPTFOO_JS%" eval -j 1 --env-file .env -o promptfoo_results.json -o promptfoo_results.html --no-cache
+                            node "%PROMPTFOO_JS%" eval -j 1 --env-file .env -o promptfoo_results.json -o promptfoo_results.html --no-cache || ver
                         '''
                     }
                 }
@@ -106,7 +109,7 @@ pipeline {
                     if (fileExists('promptfoo/use_cases/dify-eval/promptfoo_results.json')) {
                         echo '== 检查失败用例 =='
                         dir('promptfoo/use_cases/dify-eval') {
-                            def failCount = bat(returnStdout: true, script: 'node check-fails.js').trim()
+                            def failCount = bat(returnStdout: true, script: '@echo OFF & node check-fails.js').trim()
                             echo "Failed cases: ${failCount}"
                             try {
                                 def fails = failCount.toInteger()
