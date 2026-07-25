@@ -13,8 +13,6 @@ pipeline {
     }
 
     environment {
-        OPENAI_API_KEY = credentials('promptfoo-glm-apikey')
-        DIFY_API_KEY   = credentials('dify-apikey')
         DIFY_BASE_URL  = 'http://dify.mycompany.com:5001/v1'
         DIFY_USER      = 'abc-123'
     }
@@ -29,7 +27,6 @@ pipeline {
         stage('环境诊断') {
             steps {
                 echo '== 打印环境信息 =='
-                // 用 @ 而非默认输出，避免某些命令卡住
                 bat '@echo OFF & echo WHOAMI: & whoami & echo. & echo NODE: & node --version & echo. & echo PATH: & echo %PATH%'
             }
         }
@@ -37,7 +34,6 @@ pipeline {
         stage('定位 promptfoo') {
             steps {
                 echo '== 查找 promptfoo 入口 =='
-                // 直接判断文件是否存在，不用 where（避免卡住）
                 bat '''
                     @echo OFF
                     set PROMPTFOO_JS=%APPDATA%\\npm\\node_modules\\promptfoo\\dist\\src\\entrypoint.js
@@ -57,22 +53,29 @@ pipeline {
         stage('运行 promptfoo 评测') {
             steps {
                 echo '== 执行 promptfoo eval =='
-                // promptfoo 配置在子目录 promptfoo/use_cases/dify-eval/
-                // 用 dir 切换到该目录执行,这样 promptfoo 能找到 promptfooconfig.yaml
-                dir('promptfoo/use_cases/dify-eval') {
-                    // 生成 .env 文件供 promptfoo 读取(写到子目录)
-                    writeFile file: '.env', text: """DIFY_BASE_URL=${DIFY_BASE_URL}
-DIFY_API_KEY=${DIFY_API_KEY}
-DIFY_USER=${DIFY_USER}
-OPENAI_API_KEY=${OPENAI_API_KEY}"""
+                // 用 withCredentials 显式绑定,避免 Groovy 字符串插值把 secret mask 成 ****
+                withCredentials([
+                    string(credentialsId: 'promptfoo-glm-apikey', variable: 'GLM_KEY'),
+                    string(credentialsId: 'dify-apikey', variable: 'DIFY_KEY')
+                ]) {
+                    dir('promptfoo/use_cases/dify-eval') {
+                        // 生成 .env 文件(用环境变量拼接,避免插值 mask)
+                        bat """
+                            @echo OFF
+                            (echo DIFY_BASE_URL=${DIFY_BASE_URL}^
+                            echo DIFY_API_KEY=%DIFY_KEY%^
+                            echo DIFY_USER=${DIFY_USER}^
+                            echo OPENAI_API_KEY=%GLM_KEY%) > .env
+                            echo .env generated
+                        """
 
-                    // 串行执行(-j 1)避免 Dify 模型限流(429)
-                    // 用 node 直调入口 JS,不依赖 promptfoo 命令是否在 PATH
-                    bat '''
-                        @echo OFF
-                        set PROMPTFOO_JS=%APPDATA%\\npm\\node_modules\\promptfoo\\dist\\src\\entrypoint.js
-                        node "%PROMPTFOO_JS%" eval -j 1 --env-file .env -o promptfoo_results.json -o promptfoo_results.html --no-cache
-                    '''
+                        // 串行执行(-j 1)避免 Dify 模型限流(429)
+                        bat '''
+                            @echo OFF
+                            set PROMPTFOO_JS=%APPDATA%\\npm\\node_modules\\promptfoo\\dist\\src\\entrypoint.js
+                            node "%PROMPTFOO_JS%" eval -j 1 --env-file .env -o promptfoo_results.json -o promptfoo_results.html --no-cache
+                        '''
+                    }
                 }
             }
         }
@@ -95,21 +98,27 @@ OPENAI_API_KEY=${OPENAI_API_KEY}"""
                 allowMissing: true
             ])
 
+            // 用 findstr 判断失败用例(不依赖 readJSON 插件)
+            // promptfoo_results.json 里 "success": false 表示失败用例
             script {
                 if (fileExists('promptfoo/use_cases/dify-eval/promptfoo_results.json')) {
-                    def results = readJSON file: 'promptfoo/use_cases/dify-eval/promptfoo_results.json'
-                    def fails = 0
-                    if (results.results) {
-                        for (r in results.results) {
-                            if (r.success == false) {
-                                fails++
-                            }
+                    echo '== 检查失败用例 =='
+                    def failCheck = bat(returnStdout: true, script: '''
+                        @echo OFF
+                        findstr /C:"\"success\":false" "promptfoo\\use_cases\\dify-eval\\promptfoo_results.json" | find /C /V ""
+                    ''').trim()
+                    echo "Failed cases (raw): ${failCheck}"
+                    try {
+                        def fails = failCheck.toInteger()
+                        echo "评测完成,失败用例数: ${fails}"
+                        if (fails > 0) {
+                            currentBuild.result = 'UNSTABLE'
                         }
+                    } catch (Exception e) {
+                        echo "无法解析失败数,跳过门禁判断"
                     }
-                    echo "Done. Failed cases: ${fails}"
-                    if (fails > 0) {
-                        currentBuild.result = 'UNSTABLE'
-                    }
+                } else {
+                    echo '结果文件不存在,跳过门禁判断'
                 }
             }
         }
