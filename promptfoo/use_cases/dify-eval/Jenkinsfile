@@ -2,28 +2,21 @@
 // Dify 动物图片识别工作流 - promptfoo 测试流水线
 // ============================================================
 // 触发方式：手动 / 定时(每晚23:00) / Git提交
-// 运行环境：Windows + Jenkins (LocalSystem 账号)
-// 前置依赖：Node.js（系统级 PATH 可用）
-//          promptfoo（自动定位或安装）
+// 运行环境：Windows + Jenkins (wangj 账号)
 // ============================================================
 
 pipeline {
     agent any
 
     triggers {
-        // 每晚 23:00 定时跑
         cron('H 23 * * *')
     }
 
     environment {
-        // promptfoo 评测使用的断言模型 API Key（存为 Jenkins Secret Text 凭证）
         OPENAI_API_KEY = credentials('promptfoo-glm-apikey')
-        // Dify 工作流 API Key（存为 Jenkins Secret Text 凭证）
         DIFY_API_KEY   = credentials('dify-apikey')
         DIFY_BASE_URL  = 'http://dify.mycompany.com:5001/v1'
         DIFY_USER      = 'abc-123'
-        // promptfoo 入口（优先用 npm 全局安装的，否则用 npx）
-        PROMPTFOO_ENTRY = 'dist/src/entrypoint.js'
     }
 
     options {
@@ -33,26 +26,30 @@ pipeline {
     }
 
     stages {
-        stage('环境准备') {
+        stage('环境诊断') {
             steps {
-                echo '== 检查 Node.js =='
-                bat 'node --version'
+                echo '== 打印环境信息 =='
+                // 用 @ 而非默认输出，避免某些命令卡住
+                bat '@echo OFF & echo WHOAMI: & whoami & echo. & echo NODE: & node --version & echo. & echo PATH: & echo %PATH%'
+            }
+        }
 
-                echo '== 定位/安装 promptfoo =='
-                // Windows 用 bat；优先用全局 promptfoo，找不到则用 node 直调入口 JS
+        stage('定位 promptfoo') {
+            steps {
+                echo '== 查找 promptfoo 入口 =='
+                // 直接判断文件是否存在，不用 where（避免卡住）
                 bat '''
-                    where promptfoo >nul 2>&1 && (
-                        echo promptfoo 已安装:
-                        promptfoo --version
-                    ) || (
-                        echo promptfoo 未在 PATH，尝试用 node 直调全局安装的入口...
-                        if exist "%APPDATA%\\npm\\node_modules\\promptfoo\\dist\\src\\entrypoint.js" (
-                            echo 使用已安装的全局 promptfoo
-                        ) else (
-                            echo 全局也未找到，使用 npx 临时拉取
-                        )
+                    @echo OFF
+                    set PROMPTFOO_JS=%APPDATA%\\npm\\node_modules\\promptfoo\\dist\\src\\entrypoint.js
+                    if exist "%PROMPTFOO_JS%" (
+                        echo FOUND: %PROMPTFOO_JS%
+                        echo VERSION:
+                        node "%PROMPTFOO_JS%" --version
+                    ) else (
+                        echo NOT FOUND at %PROMPTFOO_JS%
+                        echo APPDATA=%APPDATA%
+                        exit /b 1
                     )
-                    node --version
                 '''
             }
         }
@@ -60,25 +57,18 @@ pipeline {
         stage('运行 promptfoo 评测') {
             steps {
                 echo '== 执行 promptfoo eval =='
-                // 生成 .env 文件供 promptfoo --env-file 读取
-                // .env 不进 Git（已在 .gitignore），运行时由 Jenkins 凭证动态生成
-                writeFile file: '.env', text: """
-                    DIFY_BASE_URL=${DIFY_BASE_URL}
-                    DIFY_API_KEY=${DIFY_API_KEY}
-                    DIFY_USER=${DIFY_USER}
-                    OPENAI_API_KEY=${OPENAI_API_KEY}
-                """.trim()
+                // 生成 .env 文件供 promptfoo 读取
+                writeFile file: '.env', text: """DIFY_BASE_URL=${DIFY_BASE_URL}
+DIFY_API_KEY=${DIFY_API_KEY}
+DIFY_USER=${DIFY_USER}
+OPENAI_API_KEY=${OPENAI_API_KEY}"""
 
-                // -j 1 串行执行，避免 Dify 模型供应商限流(429)
-                // 同时输出 JSON(用于门禁判断) 和 HTML(用于页面展示)
-                // Windows 下用 bat，优先用 promptfoo 命令，回退到 node 调入口
+                // 串行执行(-j 1)避免 Dify 模型限流(429)
+                // 用 node 直调入口 JS，不依赖 promptfoo 命令是否在 PATH
                 bat '''
-                    set PROMPTFOO_CMD=
-                    where promptfoo >nul 2>&1 && set PROMPTFOO_CMD=promptfoo
-                    if "%PROMPTFOO_CMD%"=="" set PROMPTFOO_CMD=node "%APPDATA%\\npm\\node_modules\\promptfoo\\dist\\src\\entrypoint.js"
-
-                    %PROMPTFOO_CMD% eval -j 1 --env-file .env -o promptfoo_results.json -o promptfoo_results.html --no-cache 2>&1 | tee promptfoo_run.log
-                    exit /b 0
+                    @echo OFF
+                    set PROMPTFOO_JS=%APPDATA%\\npm\\node_modules\\promptfoo\\dist\\src\\entrypoint.js
+                    node "%PROMPTFOO_JS%" eval -j 1 --env-file .env -o promptfoo_results.json -o promptfoo_results.html --no-cache
                 '''
             }
         }
@@ -86,24 +76,21 @@ pipeline {
 
     post {
         always {
-            echo '== 清理临时 .env（含密钥，勿归档） =='
+            echo '== 清理临时 .env =='
             bat 'if exist .env del .env'
 
             echo '== 归档产物 =='
-            archiveArtifacts artifacts: 'promptfoo_run.log, promptfoo_results.json', allowEmptyArchive: true
+            archiveArtifacts artifacts: 'promptfoo_results.json, promptfoo_results.html', allowEmptyArchive: true
 
-            // 发布 HTML 报告到 Jenkins 任务详情页
-            // 前置：Jenkins 安装 HTML Publisher 插件
             publishHTML(target: [
                 reportDir: '.',
                 reportFiles: 'promptfoo_results.html',
-                reportName: 'Promptfoo 评测报告',
+                reportName: 'Promptfoo Report',
                 keepAll: true,
                 alwaysLinkToLastBuild: true,
                 allowMissing: true
             ])
 
-            // 评测若有失败用例，则标记构建为不稳定(黄色)，便于流水线门禁
             script {
                 if (fileExists('promptfoo_results.json')) {
                     def results = readJSON file: 'promptfoo_results.json'
@@ -115,7 +102,7 @@ pipeline {
                             }
                         }
                     }
-                    echo "评测完成，失败用例数: ${fails}"
+                    echo "Done. Failed cases: ${fails}"
                     if (fails > 0) {
                         currentBuild.result = 'UNSTABLE'
                     }
