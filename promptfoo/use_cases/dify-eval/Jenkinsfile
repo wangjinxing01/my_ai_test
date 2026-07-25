@@ -59,15 +59,17 @@ pipeline {
                     string(credentialsId: 'dify-apikey', variable: 'DIFY_KEY')
                 ]) {
                     dir('promptfoo/use_cases/dify-eval') {
-                        // 生成 .env 文件(用环境变量拼接,避免插值 mask)
-                        bat """
+                        // 生成 .env 文件:用 withCredentials 绑定的 %VAR% 写入
+                        // 每行单独 echo > (避免 cmd 续行符 ^ 在重定向时出问题)
+                        bat '''
                             @echo OFF
-                            (echo DIFY_BASE_URL=${DIFY_BASE_URL}^
-                            echo DIFY_API_KEY=%DIFY_KEY%^
-                            echo DIFY_USER=${DIFY_USER}^
-                            echo OPENAI_API_KEY=%GLM_KEY%) > .env
-                            echo .env generated
-                        """
+                            echo DIFY_BASE_URL=%DIFY_BASE_URL% > .env
+                            echo DIFY_API_KEY=%DIFY_KEY% >> .env
+                            echo DIFY_USER=%DIFY_USER% >> .env
+                            echo OPENAI_API_KEY=%GLM_KEY% >> .env
+                            echo .env content:
+                            type .env
+                        '''
 
                         // 串行执行(-j 1)避免 Dify 模型限流(429)
                         bat '''
