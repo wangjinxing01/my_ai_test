@@ -100,29 +100,28 @@ pipeline {
                 allowMissing: true
             ])
 
-            // 用 findstr 判断失败用例(不依赖 readJSON 插件)
-            // promptfoo_results.json 里 "success": false 表示失败用例
-            script {
-                if (fileExists('promptfoo/use_cases/dify-eval/promptfoo_results.json')) {
-                    echo '== 检查失败用例 =='
-                    def failCheck = bat(returnStdout: true, script: '''
-                        @echo OFF
-                        findstr /C:"\"success\":false" "promptfoo\\use_cases\\dify-eval\\promptfoo_results.json" | find /C /V ""
-                    ''').trim()
-                    echo "Failed cases (raw): ${failCheck}"
-                    try {
-                        def fails = failCheck.toInteger()
-                        echo "评测完成,失败用例数: ${fails}"
-                        if (fails > 0) {
-                            currentBuild.result = 'UNSTABLE'
+                // 用 Node 解析 JSON(比 findstr 可靠,且不依赖 readJSON 插件)
+                // check-fails.js 输出失败用例数,始终 exit 0
+                script {
+                    if (fileExists('promptfoo/use_cases/dify-eval/promptfoo_results.json')) {
+                        echo '== 检查失败用例 =='
+                        dir('promptfoo/use_cases/dify-eval') {
+                            def failCount = bat(returnStdout: true, script: 'node check-fails.js').trim()
+                            echo "Failed cases: ${failCount}"
+                            try {
+                                def fails = failCount.toInteger()
+                                echo "评测完成,失败用例数: ${fails}"
+                                if (fails > 0) {
+                                    currentBuild.result = 'UNSTABLE'
+                                }
+                            } catch (Exception e) {
+                                echo "无法解析失败数,跳过门禁判断"
+                            }
                         }
-                    } catch (Exception e) {
-                        echo "无法解析失败数,跳过门禁判断"
+                    } else {
+                        echo '结果文件不存在,跳过门禁判断'
                     }
-                } else {
-                    echo '结果文件不存在,跳过门禁判断'
                 }
-            }
         }
     }
 }
