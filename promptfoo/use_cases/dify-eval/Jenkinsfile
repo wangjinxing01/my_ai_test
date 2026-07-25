@@ -57,19 +57,23 @@ pipeline {
         stage('运行 promptfoo 评测') {
             steps {
                 echo '== 执行 promptfoo eval =='
-                // 生成 .env 文件供 promptfoo 读取
-                writeFile file: '.env', text: """DIFY_BASE_URL=${DIFY_BASE_URL}
+                // promptfoo 配置在子目录 promptfoo/use_cases/dify-eval/
+                // 用 dir 切换到该目录执行,这样 promptfoo 能找到 promptfooconfig.yaml
+                dir('promptfoo/use_cases/dify-eval') {
+                    // 生成 .env 文件供 promptfoo 读取(写到子目录)
+                    writeFile file: '.env', text: """DIFY_BASE_URL=${DIFY_BASE_URL}
 DIFY_API_KEY=${DIFY_API_KEY}
 DIFY_USER=${DIFY_USER}
 OPENAI_API_KEY=${OPENAI_API_KEY}"""
 
-                // 串行执行(-j 1)避免 Dify 模型限流(429)
-                // 用 node 直调入口 JS，不依赖 promptfoo 命令是否在 PATH
-                bat '''
-                    @echo OFF
-                    set PROMPTFOO_JS=%APPDATA%\\npm\\node_modules\\promptfoo\\dist\\src\\entrypoint.js
-                    node "%PROMPTFOO_JS%" eval -j 1 --env-file .env -o promptfoo_results.json -o promptfoo_results.html --no-cache
-                '''
+                    // 串行执行(-j 1)避免 Dify 模型限流(429)
+                    // 用 node 直调入口 JS,不依赖 promptfoo 命令是否在 PATH
+                    bat '''
+                        @echo OFF
+                        set PROMPTFOO_JS=%APPDATA%\\npm\\node_modules\\promptfoo\\dist\\src\\entrypoint.js
+                        node "%PROMPTFOO_JS%" eval -j 1 --env-file .env -o promptfoo_results.json -o promptfoo_results.html --no-cache
+                    '''
+                }
             }
         }
     }
@@ -77,13 +81,13 @@ OPENAI_API_KEY=${OPENAI_API_KEY}"""
     post {
         always {
             echo '== 清理临时 .env =='
-            bat 'if exist .env del .env'
+            bat 'if exist promptfoo\\use_cases\\dify-eval\\.env del promptfoo\\use_cases\\dify-eval\\.env'
 
             echo '== 归档产物 =='
-            archiveArtifacts artifacts: 'promptfoo_results.json, promptfoo_results.html', allowEmptyArchive: true
+            archiveArtifacts artifacts: 'promptfoo/use_cases/dify-eval/promptfoo_results.json, promptfoo/use_cases/dify-eval/promptfoo_results.html', allowEmptyArchive: true
 
             publishHTML(target: [
-                reportDir: '.',
+                reportDir: 'promptfoo/use_cases/dify-eval',
                 reportFiles: 'promptfoo_results.html',
                 reportName: 'Promptfoo Report',
                 keepAll: true,
@@ -92,8 +96,8 @@ OPENAI_API_KEY=${OPENAI_API_KEY}"""
             ])
 
             script {
-                if (fileExists('promptfoo_results.json')) {
-                    def results = readJSON file: 'promptfoo_results.json'
+                if (fileExists('promptfoo/use_cases/dify-eval/promptfoo_results.json')) {
+                    def results = readJSON file: 'promptfoo/use_cases/dify-eval/promptfoo_results.json'
                     def fails = 0
                     if (results.results) {
                         for (r in results.results) {
