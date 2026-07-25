@@ -30,14 +30,22 @@ tests: file://tests.json
 defaultTest:
   options:
     provider:
-      # 断言模型：智谱 GLM-5.2
-      # apiKey 通过环境变量 OPENAI_API_KEY 注入（promptfoo 默认读该变量）
+      # 断言模型:智谱 GLM-5.2
+      # apiKey 通过环境变量 OPENAI_API_KEY 注入(promptfoo 默认读该变量)
       id: openai:chat:glm-5.2
       config:
         apiBaseUrl: 'https://open.bigmodel.cn/api/paas/v4'
         # 推理模型 glm-5.2 的 reasoning 会占用 token，默认 1024 会被思考占满导致无输出。
         # 调大到 4096，留足空间让思考结束后还能输出判定 JSON。
         max_tokens: 4096
+        # 关键:GLM-5.2 是推理模型,默认开启 thinking,思考过程会污染 content
+        # 导致 promptfoo 解析 "Could not extract JSON from llm-rubric response"
+        # 用 passthrough 传 thinking:{type:disabled} 显式关闭思考,
+        # 配合 showThinking:false 双保险(让 promptfoo 只取最终 content)
+        showThinking: false
+        passthrough:
+          thinking:
+            type: disabled
   assert:
     # 断言1：格式校验 - JSON 含 name(string)/number(number)/description(string)
     # 严格按 JSON 规范：数字不加引号，字符串加引号
